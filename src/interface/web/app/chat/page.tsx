@@ -100,11 +100,21 @@ function ChatBodyData(props: ChatBodyDataProps) {
             props.setUploadedFiles(uploadedFiles);
         }
     }, [setQueryToProcess, props.setImages, conversationId]);
+    // 在处理用户输入时进行转义
+    const escapeHtml = (unsafe: string) => {
+        return unsafe
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+    };
 
     useEffect(() => {
         if (message) {
             setProcessingMessage(true);
-            setQueryToProcess(message);
+            // setQueryToProcess(message);          // old chunk
+            setQueryToProcess(escapeHtml(message)); // 转义用户输入
         }
     }, [message, setQueryToProcess]);
 

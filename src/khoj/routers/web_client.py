@@ -23,10 +23,10 @@ def index(request: Request):
     return templates.TemplateResponse("index.html", context={"request": request})
 
 
-@web_client.post("/", response_class=FileResponse)
-@requires(["authenticated"], redirect="login_page")
-def index_post(request: Request):
-    return templates.TemplateResponse("index.html", context={"request": request})
+# @web_client.post("/", response_class=FileResponse)
+# @requires(["authenticated"], redirect="login_page")
+# def index_post(request: Request):
+#     return templates.TemplateResponse("index.html", context={"request": request})
 
 
 @web_client.get("/search", response_class=FileResponse)
@@ -130,6 +130,17 @@ def automations_config_page(
 ):
     return templates.TemplateResponse(
         "automations/index.html",
+        context={
+            "request": request,
+        },
+    )
+
+
+@web_client.post("/new_route", response_class=FileResponse)
+@requires(["authenticated"], redirect="login_page")
+def index_post(request: Request):
+    return templates.TemplateResponse(
+        "new_file/index.html",
         context={
             "request": request,
         },
