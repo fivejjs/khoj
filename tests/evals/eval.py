@@ -5,6 +5,7 @@ import logging
 import os
 import time
 from datetime import datetime
+from io import StringIO
 from typing import Any, Dict
 
 import pandas as pd
@@ -21,7 +22,7 @@ logger = logging.getLogger(__name__)
 KHOJ_URL = os.getenv("KHOJ_URL", "http://localhost:42110")
 KHOJ_CHAT_API_URL = f"{KHOJ_URL}/api/chat"
 KHOJ_API_KEY = os.getenv("KHOJ_API_KEY")
-KHOJ_MODE = os.getenv("KHOJ_MODE")  # E.g research, general, notes etc.
+KHOJ_MODE = os.getenv("KHOJ_MODE", "default")  # E.g research, general, notes etc.
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_EVAL_MODEL = os.getenv("GEMINI_EVAL_MODEL", "gemini-1.5-pro-002")
@@ -31,16 +32,28 @@ GEMINI_API_URL = (
 
 SAMPLE_SIZE = os.getenv("SAMPLE_SIZE")  # Number of examples to evaluate
 RANDOMIZE = os.getenv("RANDOMIZE", "false").lower() == "true"  # Randomize examples
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", 10))  # Number of examples to evaluate in parallel
-SLEEP_SECONDS = 1  # Delay between API calls to avoid rate limiting
+BATCH_SIZE = int(
+    os.getenv("BATCH_SIZE", int(SAMPLE_SIZE) / 10 if SAMPLE_SIZE else 10)
+)  # Examples to evaluate in each batch
+SLEEP_SECONDS = 3 if KHOJ_MODE == "general" else 1  # Sleep between API calls to avoid rate limiting
 
 
 def load_frames_dataset():
-    """Load the FRAMES benchmark dataset from HuggingFace"""
+    """
+    Load the Google FRAMES benchmark dataset from HuggingFace
+
+    FRAMES is a benchmark dataset to evaluate retrieval and answering capabilities of agents.
+    It contains ~800 requiring multi-hop retrieval and reasoning across various topics.
+
+    ### Data Fields
+    - Prompt: The question to be answered
+    - Answer: The ground truth answer
+    - reasoning_types: The type of reasoning required to answer the question
+    """
     try:
         dataset = load_dataset("google/frames-benchmark")
-        dataset = dataset.shuffle() if RANDOMIZE else dataset
         # Use test split for evaluation. Sample and shuffle dataset if configured
+        dataset = dataset.shuffle() if RANDOMIZE else dataset
         return dataset["test"][: int(SAMPLE_SIZE)] if SAMPLE_SIZE else dataset["test"]
 
     except Exception as e:
@@ -48,24 +61,36 @@ def load_frames_dataset():
         return None
 
 
-def load_talc_dataset():
+def load_simpleqa_dataset():
     """
-    Load the TALC dataset from Github.
+    Load the OpenAI SimpleQA benchmark dataset from their public bucket.
 
-    Normalize it into the FRAMES benchmark structure and the HuggingFace Dataset format.
+    SimpleQA is a dataset of moderately difficult q&a for 2024 models to answer across various topics.
+    It contains ~4000 human vetted questions and answers with additional metadata.
+    Its usage can be seen in openai/simple-evals github repository as well.
+
+    ### Data Fields
+    - problem: The question to be answered
+    - answer: The ground truth answer
+    - metadata: Additional metadata including topic information
     """
+
     try:
-        # Load TALC search benchmark from Github
-        raw_url = "https://raw.githubusercontent.com/Talc-AI/search-bench/3fd5b0858e2effa4c1578c7d046bee0a3895c488/data/searchbench_08_30_2024.jsonl"
+        # Load SimpleQA benchmark from OpenAI public bucket
+        raw_url = "https://openaipublic.blob.core.windows.net/simple-evals/simple_qa_test_set.csv"
         response = requests.get(raw_url)
         response.raise_for_status()
 
-        # Parse benchmark from raw JSONL response
-        jsonl_data = [json.loads(line) for line in response.text.splitlines()]
-
-        # Rename keys to match FRAMES format
+        # Parse benchmark from raw CSV response
+        csv_data = pd.read_csv(StringIO(response.text))
+        # Normalize it into FRAMES format
         formatted_data = [
-            {"Prompt": d["question"], "Answer": d["expected_answer"], "reasoning_types": "talc"} for d in jsonl_data
+            {
+                "Prompt": d["problem"],
+                "Answer": d["answer"],
+                "reasoning_types": json.loads(csv_data.to_dict("records")[0]["metadata"].replace("'", '"'))["topic"],
+            }
+            for d in csv_data.to_dict("records")
         ]
 
         # Convert benchmark to HF Dataset
@@ -74,9 +99,8 @@ def load_talc_dataset():
         dataset = dataset.select(range(int(SAMPLE_SIZE))) if SAMPLE_SIZE else dataset
 
         return dataset
-
     except Exception as e:
-        logger.error(f"Error loading dataset: {e}")
+        logger.error(f"Error loading simpleqa dataset: {e}")
         return None
 
 
@@ -208,7 +232,7 @@ def parse_args():
         "--dataset",
         "-d",
         default="frames",
-        choices=["frames", "talc"],
+        choices=["frames", "simpleqa"],
         help="Dataset to use for evaluation (default: frames)",
     )
     return parser.parse_args()
@@ -220,11 +244,11 @@ def main():
     dataset = None
 
     # Load dataset
-    with timer(f"Loaded {args.dataset} dataset in", logger):
+    with timer(f"Loaded {args.dataset} dataset in", logger, log_level=logging.INFO):
         if args.dataset == "frames":
             dataset = load_frames_dataset()
-        elif args.dataset == "talc":
-            dataset = load_talc_dataset()
+        elif args.dataset == "simpleqa":
+            dataset = load_simpleqa_dataset()
     if dataset is None:
         return
 
