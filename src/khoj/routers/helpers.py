@@ -336,7 +336,7 @@ async def acheck_if_safe_prompt(system_prompt: str, user: KhojUser = None, lax: 
     return is_safe, reason
 
 
-async def aget_relevant_tools_to_execute(
+async def aget_data_sources_and_output_format(
     query: str,
     conversation_history: dict,
     is_task: bool,
@@ -345,33 +345,33 @@ async def aget_relevant_tools_to_execute(
     agent: Agent = None,
     query_files: str = None,
     tracer: dict = {},
-):
+) -> Dict[str, Any]:
     """
-    Given a query, determine which of the available tools the agent should use in order to answer appropriately.
+    Given a query, determine which of the available data sources and output modes the agent should use to answer appropriately.
     """
 
-    tool_options = dict()
-    tool_options_str = ""
+    source_options = dict()
+    source_options_str = ""
 
-    agent_tools = agent.input_tools if agent else []
+    agent_sources = agent.input_tools if agent else []
 
-    for tool, description in tool_descriptions_for_llm.items():
-        tool_options[tool.value] = description
-        if len(agent_tools) == 0 or tool.value in agent_tools:
-            tool_options_str += f'- "{tool.value}": "{description}"\n'
+    for source, description in tool_descriptions_for_llm.items():
+        source_options[source.value] = description
+        if len(agent_sources) == 0 or source.value in agent_sources:
+            source_options_str += f'- "{source.value}": "{description}"\n'
 
-    mode_options = dict()
-    mode_options_str = ""
+    output_options = dict()
+    output_options_str = ""
 
-    output_modes = agent.output_modes if agent else []
+    agent_outputs = agent.output_modes if agent else []
 
-    for mode, description in mode_descriptions_for_llm.items():
+    for output, description in mode_descriptions_for_llm.items():
         # Do not allow tasks to schedule another task
-        if is_task and mode == ConversationCommand.Automation:
+        if is_task and output == ConversationCommand.Automation:
             continue
-        mode_options[mode.value] = description
-        if len(output_modes) == 0 or mode.value in output_modes:
-            mode_options_str += f'- "{mode.value}": "{description}"\n'
+        output_options[output.value] = description
+        if len(agent_outputs) == 0 or output.value in agent_outputs:
+            output_options_str += f'- "{output.value}": "{description}"\n'
 
     chat_history = construct_chat_history(conversation_history)
 
@@ -384,8 +384,8 @@ async def aget_relevant_tools_to_execute(
 
     relevant_tools_prompt = prompts.pick_relevant_tools.format(
         query=query,
-        tools=tool_options_str,
-        outputs=mode_options_str,
+        sources=source_options_str,
+        outputs=output_options_str,
         chat_history=chat_history,
         personality_context=personality_context,
     )
@@ -402,45 +402,43 @@ async def aget_relevant_tools_to_execute(
     try:
         response = clean_json(response)
         response = json.loads(response)
-        input_tools = [q.strip() for q in response["source"] if q.strip()]
-        if not isinstance(input_tools, list) or not input_tools or len(input_tools) == 0:
-            logger.error(f"Invalid response for determining relevant tools: {input_tools}")
-            return tool_options
 
-        output_modes = [q.strip() for q in response["output"] if q.strip()]
-        if not isinstance(output_modes, list) or not output_modes or len(output_modes) == 0:
-            logger.error(f"Invalid response for determining relevant output modes: {output_modes}")
-            return mode_options
+        selected_sources = [q.strip() for q in response.get("source", []) if q.strip()]
+        selected_output = response.get("output", "text").strip()  # Default to text output
 
-        final_response = [] if not is_task else [ConversationCommand.AutomatedTask]
-        for llm_suggested_tool in input_tools:
+        if not isinstance(selected_sources, list) or not selected_sources or len(selected_sources) == 0:
+            raise ValueError(
+                f"Invalid response for determining relevant tools: {selected_sources}. Raw Response: {response}"
+            )
+
+        result: Dict = {"sources": [], "output": None if not is_task else ConversationCommand.AutomatedTask}
+        for selected_source in selected_sources:
             # Add a double check to verify it's in the agent list, because the LLM sometimes gets confused by the tool options.
-            if llm_suggested_tool in tool_options.keys() and (
-                len(agent_tools) == 0 or llm_suggested_tool in agent_tools
+            if (
+                selected_source in source_options.keys()
+                and isinstance(result["sources"], list)
+                and (len(agent_sources) == 0 or selected_source in agent_sources)
             ):
                 # Check whether the tool exists as a valid ConversationCommand
-                final_response.append(ConversationCommand(llm_suggested_tool))
+                result["sources"].append(ConversationCommand(selected_source))
 
-        for llm_suggested_output in output_modes:
-            # Add a double check to verify it's in the agent list, because the LLM sometimes gets confused by the tool options.
-            if llm_suggested_output in mode_options.keys() and (
-                len(output_modes) == 0 or llm_suggested_output in output_modes
-            ):
-                # Check whether the tool exists as a valid ConversationCommand
-                final_response.append(ConversationCommand(llm_suggested_output))
+        # Add a double check to verify it's in the agent list, because the LLM sometimes gets confused by the tool options.
+        if selected_output in output_options.keys() and (len(agent_outputs) == 0 or selected_output in agent_outputs):
+            # Check whether the tool exists as a valid ConversationCommand
+            result["output"] = ConversationCommand(selected_output)
 
-        if is_none_or_empty(final_response):
-            if len(agent_tools) == 0:
-                final_response = [ConversationCommand.Default, ConversationCommand.Text]
+        if is_none_or_empty(result):
+            if len(agent_sources) == 0:
+                result = {"sources": [ConversationCommand.Default], "output": ConversationCommand.Text}
             else:
-                final_response = [ConversationCommand.General, ConversationCommand.Text]
-    except Exception:
-        logger.error(f"Invalid response for determining relevant tools: {response}")
-        if len(agent_tools) == 0:
-            final_response = [ConversationCommand.Default, ConversationCommand.Text]
-        else:
-            final_response = agent_tools
-    return final_response
+                result = {"sources": [ConversationCommand.General], "output": ConversationCommand.Text}
+    except Exception as e:
+        logger.error(f"Invalid response for determining relevant tools: {response}. Error: {e}", exc_info=True)
+        sources = agent_sources if len(agent_sources) > 0 else [ConversationCommand.Default]
+        output = agent_outputs[0] if len(agent_outputs) > 0 else ConversationCommand.Text
+        result = {"sources": sources, "output": output}
+
+    return result
 
 
 async def infer_webpage_urls(
@@ -755,7 +753,11 @@ async def generate_excalidraw_diagram(
         yield None, None
         return
 
-    yield better_diagram_description_prompt, excalidraw_diagram_description
+    scratchpad = excalidraw_diagram_description.get("scratchpad")
+
+    inferred_queries = f"Instruction: {better_diagram_description_prompt}\n\nScratchpad: {scratchpad}"
+
+    yield inferred_queries, excalidraw_diagram_description.get("elements")
 
 
 async def generate_better_diagram_description(
@@ -824,7 +826,7 @@ async def generate_excalidraw_diagram_from_description(
     user: KhojUser = None,
     agent: Agent = None,
     tracer: dict = {},
-) -> str:
+) -> Dict[str, Any]:
     personality_context = (
         prompts.personality_context.format(personality=agent.personality) if agent and agent.personality else ""
     )
@@ -840,10 +842,18 @@ async def generate_excalidraw_diagram_from_description(
         )
         raw_response = clean_json(raw_response)
         try:
+            # Expect response to have `elements` and `scratchpad` keys
             response: Dict[str, str] = json.loads(raw_response)
+            if (
+                not response
+                or not isinstance(response, Dict)
+                or not response.get("elements")
+                or not response.get("scratchpad")
+            ):
+                raise AssertionError(f"Invalid response for generating Excalidraw diagram: {response}")
         except Exception:
             raise AssertionError(f"Invalid response for generating Excalidraw diagram: {raw_response}")
-        if not response or not isinstance(response, List) or not isinstance(response[0], Dict):
+        if not response or not isinstance(response["elements"], List) or not isinstance(response["elements"][0], Dict):
             # TODO Some additional validation here that it's a valid Excalidraw diagram
             raise AssertionError(f"Invalid response for improving diagram description: {response}")
 
@@ -1772,6 +1782,7 @@ Manage your automations [here](/automations).
 class MessageProcessor:
     def __init__(self):
         self.references = {}
+        self.usage = {}
         self.raw_response = ""
 
     def convert_message_chunk_to_json(self, raw_chunk: str) -> Dict[str, Any]:
@@ -1795,6 +1806,8 @@ class MessageProcessor:
         chunk_type = ChatEvent(chunk["type"])
         if chunk_type == ChatEvent.REFERENCES:
             self.references = chunk["data"]
+        elif chunk_type == ChatEvent.USAGE:
+            self.usage = chunk["data"]
         elif chunk_type == ChatEvent.MESSAGE:
             chunk_data = chunk["data"]
             if isinstance(chunk_data, dict):
@@ -1839,7 +1852,7 @@ async def read_chat_stream(response_iterator: AsyncGenerator[str, None]) -> Dict
     if buffer:
         processor.process_message_chunk(buffer)
 
-    return {"response": processor.raw_response, "references": processor.references}
+    return {"response": processor.raw_response, "references": processor.references, "usage": processor.usage}
 
 
 def get_user_config(user: KhojUser, request: Request, is_detailed: bool = False):

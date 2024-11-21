@@ -183,20 +183,23 @@ Improved Prompt:
 
 improve_diagram_description_prompt = PromptTemplate.from_template(
     """
-you are an architect working with a novice artist using a diagramming tool.
+you are an architect working with a novice digital artist using a diagramming software.
 {personality_context}
 
 you need to convert the user's query to a description format that the novice artist can use very well. you are allowed to use primitives like
 - text
 - rectangle
-- diamond
 - ellipse
 - line
 - arrow
 
 use these primitives to describe what sort of diagram the drawer should create. the artist must recreate the diagram every time, so include all relevant prior information in your description.
 
-use simple, concise language.
+- include the full, exact description. the artist does not have much experience, so be precise.
+- describe the layout.
+- you can only use straight lines.
+- use simple, concise language.
+- keep it simple and easy to understand. the artist is easily distracted.
 
 Today's Date: {current_date}
 User's Location: {location}
@@ -218,19 +221,23 @@ Query: {query}
 
 excalidraw_diagram_generation_prompt = PromptTemplate.from_template(
     """
-You are a program manager with the ability to describe diagrams to compose in professional, fine detail.
+You are a program manager with the ability to describe diagrams to compose in professional, fine detail. You LOVE getting into the details and making tedious labels, lines, and shapes look beautiful. You make everything look perfect.
 {personality_context}
 
-You need to create a declarative description of the diagram and relevant components, using this base schema. Use the `label` property to specify the text to be rendered in the respective elements. Always use light colors for the `backgroundColor` property, like white, or light blue, green, red. "type", "x", "y", "id", are required properties for all elements.
+You need to create a declarative description of the diagram and relevant components, using this base schema.
+- `label`: specify the text to be rendered in the respective elements.
+- Always use light colors for the `backgroundColor` property, like white, or light blue, green, red
+- **ALWAYS Required properties for ALL elements**: `type`, `x`, `y`, `id`.
+- Be very generous with spacing and composition. Use ample space between elements.
 
 {{
     type: string,
     x: number,
     y: number,
-    strokeColor: string,
-    backgroundColor: string,
     width: number,
     height: number,
+    strokeColor: string,
+    backgroundColor: string,
     id: string,
     label: {{
         text: string,
@@ -240,28 +247,30 @@ You need to create a declarative description of the diagram and relevant compone
 Valid types:
 - text
 - rectangle
-- diamond
 - ellipse
 - line
 - arrow
 
-For arrows and lines, you can use the `points` property to specify the start and end points of the arrow. You may also use the `label` property to specify the text to be rendered. You may use the `start` and `end` properties to connect the linear elements to other elements. The start and end point can either be the ID to map to an existing object, or the `type` to create a new object. Mapping to an existing object is useful if you want to connect it to multiple objects. Lines and arrows can only start and end at rectangle, text, diamond, or ellipse elements.
+For arrows and lines,
+- `points`: specify the start and end points of the arrow
+- **ALWAYS Required properties for ALL elements**: `type`, `x`, `y`, `id`.
+- `start` and `end` properties: connect the linear elements to other elements. The start and end point can either be the ID to map to an existing object, or the `type` and `text` to create a new object. Mapping to an existing object is useful if you want to connect it to multiple objects. Lines and arrows can only start and end at rectangle, text, or ellipse elements. Even if you're using the `start` and `end` properties, you still need to specify the `x` and `y` properties for the start and end points.
 
 {{
     type: "arrow",
     id: string,
     x: number,
     y: number,
-    width: number,
-    height: number,
     strokeColor: string,
     start: {{
         id: string,
         type: string,
+        text: string,
     }},
     end: {{
         id: string,
         type: string,
+        text: string,
     }},
     label: {{
         text: string,
@@ -272,7 +281,11 @@ For arrows and lines, you can use the `points` property to specify the start and
     ]
 }}
 
-For text, you must use the `text` property to specify the text to be rendered. You may also use `fontSize` property to specify the font size of the text. Only use the `text` element for titles, subtitles, and overviews. For labels, use the `label` property in the respective elements.
+For text,
+- `text`: specify the text to be rendered
+- **ALWAYS Required properties for ALL elements**: `type`, `x`, `y`, `id`.
+- `fontSize`: optional property to specify the font size of the text
+- Use this element only for titles, subtitles, and overviews. For labels, use the `label` property in the respective elements.
 
 {{
     type: "text",
@@ -287,19 +300,25 @@ Here's an example of a valid diagram:
 
 Design Description: Create a diagram describing a circular development process with 3 stages: design, implementation and feedback. The design stage is connected to the implementation stage and the implementation stage is connected to the feedback stage and the feedback stage is connected to the design stage. Each stage should be labeled with the stage name.
 
-Response:
-
-[
-    {{"type":"text","x":-150,"y":50,"width":300,"height":40,"id":"title_text","text":"Circular Development Process","fontSize":24}},
-    {{"type":"ellipse","x":-169,"y":113,"width":188,"height":202,"id":"design_ellipse", "label": {{"text": "Design"}}}},
-    {{"type":"ellipse","x":62,"y":394,"width":186,"height":188,"id":"implement_ellipse", "label": {{"text": "Implement"}}}},
-    {{"type":"ellipse","x":-348,"y":430,"width":184,"height":170,"id":"feedback_ellipse", "label": {{"text": "Feedback"}}}},
+Example Response:
+```json
+{{
+    "scratchpad": "The diagram represents a circular development process with 3 stages: design, implementation and feedback. Each stage is connected to the next stage using an arrow, forming a circular process.",
+    "elements": [
+    {{"type":"text","x":-150,"y":50,"id":"title_text","text":"Circular Development Process","fontSize":24}},
+    {{"type":"ellipse","x":-169,"y":113,"id":"design_ellipse", "label": {{"text": "Design"}}}},
+    {{"type":"ellipse","x":62,"y":394,"id":"implement_ellipse", "label": {{"text": "Implement"}}}},
+    {{"type":"ellipse","x":-348,"y":430,"id":"feedback_ellipse", "label": {{"text": "Feedback"}}}},
     {{"type":"arrow","x":21,"y":273,"id":"design_to_implement_arrow","points":[[0,0],[86,105]],"start":{{"id":"design_ellipse"}}, "end":{{"id":"implement_ellipse"}}}},
     {{"type":"arrow","x":50,"y":519,"id":"implement_to_feedback_arrow","points":[[0,0],[-198,-6]],"start":{{"id":"implement_ellipse"}}, "end":{{"id":"feedback_ellipse"}}}},
     {{"type":"arrow","x":-228,"y":417,"id":"feedback_to_design_arrow","points":[[0,0],[85,-123]],"start":{{"id":"feedback_ellipse"}}, "end":{{"id":"design_ellipse"}}}},
-]
+    ]
+}}
+```
 
-Create a detailed diagram from the provided context and user prompt below. Return a valid JSON object:
+Think about spacing and composition. Use ample space between elements. Double the amount of space you think you need. Create a detailed diagram from the provided context and user prompt below.
+
+Return a valid JSON object, where the drawing is in `elements` and your thought process is in `scratchpad`. If you can't make the whole diagram in one response, you can split it into multiple responses. If you need to simplify for brevity, simply do so in the `scratchpad` field. DO NOT add additional info in the `elements` field.
 
 Diagram Description: {query}
 
@@ -630,36 +649,36 @@ pick_relevant_tools = PromptTemplate.from_template(
     """
 You are Khoj, an extremely smart and helpful search assistant.
 {personality_context}
-- You have access to a variety of data sources to help you answer the user's question
-- You can use the data sources listed below to collect more relevant information
-- You can select certain types of output to respond to the user's question. Select just one output type to answer the user's question
-- You can use any combination of these data sources and output types to answer the user's question
+- You have access to a variety of data sources to help you answer the user's question.
+- You can use any subset of data sources listed below to collect more relevant information.
+- You can select the most appropriate output format from the options listed below to respond to the user's question.
+- Both the data sources and output format should be selected based on the user's query and relevant context provided in the chat history.
 
-Which of the tools listed below you would use to answer the user's question? You **only** have access to the following:
+Which of the data sources, output format listed below would you use to answer the user's question? You **only** have access to the following:
 
-Inputs:
-{tools}
+Data Sources:
+{sources}
 
-Outputs:
+Output Formats:
 {outputs}
 
 Here are some examples:
 
 Example:
 Chat History:
-User: I'm thinking of moving to a new city. I'm trying to decide between New York and San Francisco.
+User: I'm thinking of moving to a new city. I'm trying to decide between New York and San Francisco
 AI: Moving to a new city can be challenging. Both New York and San Francisco are great cities to live in. New York is known for its diverse culture and San Francisco is known for its tech scene.
 
-Q: What is the population of each of those cities?
-Khoj: {{"source": ["online"], "output": ["text"]}}
+Q: Chart the population growth of each of those cities in the last decade
+Khoj: {{"source": ["online", "code"], "output": "text"}}
 
 Example:
 Chat History:
-User: I'm thinking of my next vacation idea. Ideally, I want to see something new and exciting.
+User: I'm thinking of my next vacation idea. Ideally, I want to see something new and exciting
 AI: Excellent! Taking a vacation is a great way to relax and recharge.
 
 Q: Where did Grandma grow up?
-Khoj: {{"source": ["notes"], "output": ["text"]}}
+Khoj: {{"source": ["notes"], "output": "text"}}
 
 Example:
 Chat History:
@@ -667,7 +686,7 @@ User: Good morning
 AI: Good morning! How can I help you today?
 
 Q: How can I share my files with Khoj?
-Khoj: {{"source": ["default", "online"], "output": ["text"]}}
+Khoj: {{"source": ["default", "online"], "output": "text"}}
 
 Example:
 Chat History:
@@ -675,17 +694,18 @@ User: What is the first element in the periodic table?
 AI: The first element in the periodic table is Hydrogen.
 
 Q: Summarize this article https://en.wikipedia.org/wiki/Hydrogen
-Khoj: {{"source": ["webpage"], "output": ["text"]}}
+Khoj: {{"source": ["webpage"], "output": "text"}}
 
 Example:
 Chat History:
-User: I want to start a new hobby. I'm thinking of learning to play the guitar.
-AI: Learning to play the guitar is a great hobby. It can be a lot of fun and a great way to express yourself.
+User: I'm learning to play the guitar, so I can make a band with my friends
+AI: Learning to play the guitar is a great hobby. It can be a fun way to socialize and express yourself.
 
-Q: Draw a painting of a guitar.
-Khoj: {{"source": ["general"], "output": ["image"]}}
+Q: Create a painting of my recent jamming sessions
+Khoj: {{"source": ["notes"], "output": "image"}}
 
-Now it's your turn to pick the data sources you would like to use to answer the user's question. Provide the data sources as a list of strings in a JSON object. Do not say anything else.
+Now it's your turn to pick the appropriate data sources and output format to answer the user's query. Respond with a JSON object, including both `source` and `output` in the following format. Do not say anything else.
+{{"source": list[str], "output': str}}
 
 Chat History:
 {chat_history}

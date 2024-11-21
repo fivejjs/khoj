@@ -5,7 +5,6 @@ import math
 import mimetypes
 import os
 import queue
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -49,8 +48,6 @@ except ImportError:
 
 model_to_prompt_size = {
     # OpenAI Models
-    "gpt-3.5-turbo": 12000,
-    "gpt-4-turbo-preview": 20000,
     "gpt-4o": 20000,
     "gpt-4o-mini": 20000,
     "o1-preview": 20000,
@@ -59,12 +56,15 @@ model_to_prompt_size = {
     "gemini-1.5-flash": 20000,
     "gemini-1.5-pro": 20000,
     # Anthropic Models
-    "claude-3-5-sonnet-20240620": 20000,
-    "claude-3-opus-20240229": 20000,
+    "claude-3-5-sonnet-20241022": 20000,
+    "claude-3-5-haiku-20241022": 20000,
     # Offline Models
-    "TheBloke/Mistral-7B-Instruct-v0.2-GGUF": 3500,
-    "NousResearch/Hermes-2-Pro-Mistral-7B-GGUF": 3500,
     "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF": 20000,
+    "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF": 20000,
+    "bartowski/Llama-3.2-3B-Instruct-GGUF": 20000,
+    "bartowski/gemma-2-9b-it-GGUF": 6000,
+    "bartowski/gemma-2-2b-it-GGUF": 6000,
+    "Qwen/Qwen2.5-14B-Instruct-GGUF": 20000,
 }
 model_to_tokenizer: Dict[str, str] = {}
 
@@ -212,6 +212,8 @@ class ChatEvent(Enum):
     REFERENCES = "references"
     STATUS = "status"
     METADATA = "metadata"
+    USAGE = "usage"
+    END_RESPONSE = "end_response"
 
 
 def message_to_log(
@@ -290,7 +292,7 @@ def save_to_conversation_log(
         user_message=q,
     )
 
-    if in_debug_mode() or state.verbose > 1:
+    if os.getenv("PROMPTRACE_DIR"):
         merge_message_into_conversation_trace(q, chat_response, tracer)
 
     logger.info(
@@ -577,7 +579,7 @@ def commit_conversation_trace(
     response: str | list[dict],
     tracer: dict,
     system_message: str | list[dict] = "",
-    repo_path: str = "/tmp/promptrace",
+    repo_path: str = None,
 ) -> str:
     """
     Save trace of conversation step using git. Useful to visualize, compare and debug traces.
@@ -586,6 +588,11 @@ def commit_conversation_trace(
     try:
         from git import Repo
     except ImportError:
+        return None
+
+    # Infer repository path from environment variable or provided path
+    repo_path = repo_path or os.getenv("PROMPTRACE_DIR")
+    if not repo_path:
         return None
 
     # Serialize session, system message and response to yaml
@@ -599,9 +606,6 @@ def commit_conversation_trace(
 
     # Extract chat metadata for session
     uid, cid, mid = tracer.get("uid", "main"), tracer.get("cid", "main"), tracer.get("mid")
-
-    # Infer repository path from environment variable or provided path
-    repo_path = os.getenv("PROMPTRACE_DIR", repo_path)
 
     try:
         # Prepare git repository
@@ -740,6 +744,20 @@ Metadata
 
 def messages_to_print(messages: list[ChatMessage], max_length: int = 70) -> str:
     """
-    Format, truncate messages to print
+    Format and truncate messages to print, ensuring JSON serializable content
     """
-    return "\n".join([f"{json.dumps(message.content)[:max_length]}..." for message in messages])
+
+    def safe_serialize(content: Any) -> str:
+        try:
+            # Try JSON serialization
+            json.dumps(content)
+            return content
+        except (TypeError, json.JSONDecodeError):
+            # Handle non-serializable types
+            if hasattr(content, "format") and content.format == "WEBP":
+                return "[WebP Image]"
+            elif hasattr(content, "__dict__"):
+                return str(content.__dict__)
+            return str(content)
+
+    return "\n".join([f"{json.dumps(safe_serialize(message.content))[:max_length]}..." for message in messages])

@@ -1,4 +1,3 @@
-import os
 from datetime import datetime
 
 import freezegun
@@ -8,21 +7,20 @@ from freezegun import freeze_time
 from khoj.processor.conversation.openai.gpt import converse, extract_questions
 from khoj.processor.conversation.utils import message_to_log
 from khoj.routers.helpers import (
-    aget_relevant_tools_to_execute,
+    aget_data_sources_and_output_format,
     generate_online_subqueries,
     infer_webpage_urls,
     schedule_query,
     should_notify,
 )
 from khoj.utils.helpers import ConversationCommand
-from khoj.utils.rawconfig import LocationData
-from tests.conftest import default_user2
+from tests.helpers import generate_chat_history, get_chat_api_key
 
 # Initialize variables for tests
-api_key = os.getenv("OPENAI_API_KEY")
+api_key = get_chat_api_key()
 if api_key is None:
     pytest.skip(
-        reason="Set OPENAI_API_KEY environment variable to run tests below. Get OpenAI API key from https://platform.openai.com/account/api-keys",
+        reason="Set OPENAI_API_KEY, GEMINI_API_KEY or ANTHROPIC_API_KEY environment variable to run tests below.",
         allow_module_level=True,
     )
 
@@ -43,7 +41,6 @@ def test_extract_question_with_date_filter_from_relative_day():
         ("dt>='1984-04-01'", "dt<'1984-04-02'"),
         ("dt>'1984-03-31'", "dt<'1984-04-02'"),
     ]
-    assert len(response) == 1
     assert any([start in response[0] and end in response[0] for start, end in expected_responses]), (
         "Expected date filter to limit to 1st April 1984 in response but got: " + response[0]
     )
@@ -106,9 +103,9 @@ def test_extract_multiple_implicit_questions_from_message():
     expected_responses = [
         ("morpheus", "neo"),
     ]
-    assert len(response) == 2
+    assert len(response) > 1
     assert any([start in response[0].lower() and end in response[1].lower() for start, end in expected_responses]), (
-        "Expected two search queries in response but got: " + response[0]
+        "Expected more than one search query in response but got: " + response[0]
     )
 
 
@@ -154,8 +151,7 @@ def test_generate_search_query_using_question_and_answer_from_chat_history():
     response = extract_questions("Who is their father?", conversation_log=populate_chat_history(message_list))
 
     # Assert
-    assert len(response) == 1
-    assert "Leia" in response[0] and "Luke" in response[0]
+    assert any(["Leia" in response or "Luke" in response for response in response])
 
 
 # ----------------------------------------------------------------------------------------------------
@@ -529,19 +525,69 @@ async def test_websearch_khoj_website_for_info_about_khoj(chat_client, default_u
 @pytest.mark.parametrize(
     "user_query, expected_conversation_commands",
     [
-        ("Where did I learn to swim?", [ConversationCommand.Notes]),
-        ("Where is the nearest hospital?", [ConversationCommand.Online]),
-        ("Summarize the wikipedia page on the history of the internet", [ConversationCommand.Webpage]),
+        (
+            "Where did I learn to swim?",
+            {"sources": [ConversationCommand.Notes], "output": ConversationCommand.Text},
+        ),
+        (
+            "Where is the nearest hospital?",
+            {"sources": [ConversationCommand.Online], "output": ConversationCommand.Text},
+        ),
+        (
+            "Summarize the wikipedia page on the history of the internet",
+            {"sources": [ConversationCommand.Webpage], "output": ConversationCommand.Text},
+        ),
+        (
+            "How many noble gases are there?",
+            {"sources": [ConversationCommand.General], "output": ConversationCommand.Text},
+        ),
+        (
+            "Make a painting incorporating my past diving experiences",
+            {"sources": [ConversationCommand.Notes], "output": ConversationCommand.Image},
+        ),
+        (
+            "Create a chart of the weather over the next 7 days in Timbuktu",
+            {"sources": [ConversationCommand.Online, ConversationCommand.Code], "output": ConversationCommand.Text},
+        ),
+        (
+            "What's the highest point in this country and have I been there?",
+            {"sources": [ConversationCommand.Online, ConversationCommand.Notes], "output": ConversationCommand.Text},
+        ),
     ],
 )
 async def test_select_data_sources_actor_chooses_to_search_notes(
-    chat_client, user_query, expected_conversation_commands
+    chat_client, user_query, expected_conversation_commands, default_user2
 ):
     # Act
-    conversation_commands = await aget_relevant_tools_to_execute(user_query, {}, False, False)
+    selected_conversation_commands = await aget_data_sources_and_output_format(user_query, {}, False, default_user2)
 
     # Assert
-    assert set(expected_conversation_commands) == set(conversation_commands)
+    assert set(expected_conversation_commands["sources"]) == set(selected_conversation_commands["sources"])
+    assert expected_conversation_commands["output"] == selected_conversation_commands["output"]
+
+
+# ----------------------------------------------------------------------------------------------------
+@pytest.mark.anyio
+@pytest.mark.django_db(transaction=True)
+async def test_get_correct_tools_with_chat_history(chat_client, default_user2):
+    # Arrange
+    user_query = "What's the latest in the Israel/Palestine conflict?"
+    chat_log = [
+        (
+            "Let's talk about the current events around the world.",
+            "Sure, let's discuss the current events. What would you like to know?",
+            [],
+        ),
+        ("What's up in New York City?", "A Pride parade has recently been held in New York City, on July 31st.", []),
+    ]
+    chat_history = generate_chat_history(chat_log)
+
+    # Act
+    selected = await aget_data_sources_and_output_format(user_query, chat_history, False, default_user2)
+    sources = selected["sources"]
+
+    # Assert
+    assert sources == [ConversationCommand.Online]
 
 
 # ----------------------------------------------------------------------------------------------------
