@@ -5,6 +5,7 @@ import math
 import mimetypes
 import os
 import queue
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -14,6 +15,7 @@ from time import perf_counter
 from typing import Any, Callable, Dict, List, Optional
 
 import PIL.Image
+import pyjson5
 import requests
 import tiktoken
 import yaml
@@ -34,6 +36,7 @@ from khoj.utils.helpers import (
     ConversationCommand,
     in_debug_mode,
     is_none_or_empty,
+    is_promptrace_enabled,
     merge_dicts,
 )
 from khoj.utils.rawconfig import FileAttachment
@@ -292,7 +295,7 @@ def save_to_conversation_log(
         user_message=q,
     )
 
-    if os.getenv("PROMPTRACE_DIR"):
+    if is_promptrace_enabled():
         merge_message_into_conversation_trace(q, chat_response, tracer)
 
     logger.info(
@@ -537,6 +540,47 @@ def clean_code_python(code: str):
     return code.strip().removeprefix("```python").removesuffix("```")
 
 
+def load_complex_json(json_str):
+    """
+    Preprocess a raw JSON string to escape unescaped double quotes within value strings,
+    while preserving the JSON structure and already escaped quotes.
+    """
+
+    def replace_unescaped_quotes(match):
+        # Get the content between colons and commas/end braces
+        content = match.group(1)
+        # Replace unescaped double, single quotes that aren't already escaped
+        # Uses negative lookbehind to avoid replacing already escaped quotes
+        # Replace " with \"
+        processed_dq = re.sub(r'(?<!\\)"', '\\"', content)
+        # Replace \' with \\'
+        processed_final = re.sub(r"(?<!\\)\\'", r"\\\\'", processed_dq)
+        return f': "{processed_final}"'
+
+    # Match content between : and either , or }
+    # This pattern looks for ': ' followed by any characters until , or }
+    pattern = r':\s*"(.*?)(?<!\\)"(?=[,}])'
+
+    # Process the JSON string
+    cleaned = clean_json(rf"{json_str}")
+    processed = re.sub(pattern, replace_unescaped_quotes, cleaned)
+
+    # See which json loader can load the processed JSON as valid
+    errors = []
+    json_loaders_to_try = [json.loads, pyjson5.loads]
+    for loads in json_loaders_to_try:
+        try:
+            return loads(processed)
+        except (json.JSONDecodeError, pyjson5.Json5Exception) as e:
+            errors.append(f"{type(e).__name__}: {str(e)}")
+
+    # If all loaders fail, raise the aggregated error
+    raise ValueError(
+        f"Failed to load JSON with errors: {'; '.join(errors)}\n\n"
+        f"While attempting to load this cleaned JSON:\n{processed}"
+    )
+
+
 def defilter_query(query: str):
     """Remove any query filters in query"""
     defiltered_query = query
@@ -591,7 +635,7 @@ def commit_conversation_trace(
         return None
 
     # Infer repository path from environment variable or provided path
-    repo_path = repo_path or os.getenv("PROMPTRACE_DIR")
+    repo_path = repo_path if not is_none_or_empty(repo_path) else os.getenv("PROMPTRACE_DIR")
     if not repo_path:
         return None
 
@@ -686,7 +730,7 @@ Metadata
         return None
 
 
-def merge_message_into_conversation_trace(query: str, response: str, tracer: dict, repo_path="/tmp/promptrace") -> bool:
+def merge_message_into_conversation_trace(query: str, response: str, tracer: dict, repo_path=None) -> bool:
     """
     Merge the message branch into its parent conversation branch.
 
@@ -709,7 +753,9 @@ def merge_message_into_conversation_trace(query: str, response: str, tracer: dic
         conv_branch = f"c_{tracer['cid']}"
 
         # Infer repository path from environment variable or provided path
-        repo_path = os.getenv("PROMPTRACE_DIR", repo_path)
+        repo_path = repo_path if not is_none_or_empty(repo_path) else os.getenv("PROMPTRACE_DIR")
+        if not repo_path:
+            return None
         repo = Repo(repo_path)
 
         # Checkout conversation branch

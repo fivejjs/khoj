@@ -1,9 +1,8 @@
-import json
 import logging
-import re
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 
+import pyjson5
 from langchain.schema import ChatMessage
 
 from khoj.database.models import Agent, ChatModelOptions, KhojUser
@@ -19,7 +18,11 @@ from khoj.processor.conversation.utils import (
     generate_chatml_messages_with_context,
     messages_to_print,
 )
-from khoj.utils.helpers import ConversationCommand, is_none_or_empty
+from khoj.utils.helpers import (
+    ConversationCommand,
+    is_none_or_empty,
+    truncate_code_context,
+)
 from khoj.utils.rawconfig import LocationData
 from khoj.utils.yaml import yaml_dump
 
@@ -100,7 +103,7 @@ def extract_questions_gemini(
     # Extract, Clean Message from Gemini's Response
     try:
         response = clean_json(response)
-        response = json.loads(response)
+        response = pyjson5.loads(response)
         response = [q.strip() for q in response["queries"] if q.strip()]
         if not isinstance(response, list) or not response:
             logger.error(f"Invalid response for constructing subqueries: {response}")
@@ -208,7 +211,9 @@ def converse_gemini(
     if ConversationCommand.Online in conversation_commands or ConversationCommand.Webpage in conversation_commands:
         context_message += f"{prompts.online_search_conversation.format(online_results=yaml_dump(online_results))}\n\n"
     if ConversationCommand.Code in conversation_commands and not is_none_or_empty(code_results):
-        context_message += f"{prompts.code_executed_context.format(code_results=str(code_results))}\n\n"
+        context_message += (
+            f"{prompts.code_executed_context.format(code_results=truncate_code_context(code_results))}\n\n"
+        )
     context_message = context_message.strip()
 
     # Setup Prompt with Primer or Conversation History

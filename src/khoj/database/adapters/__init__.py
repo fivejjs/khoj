@@ -224,7 +224,9 @@ async def acreate_user_by_phone_number(phone_number: str) -> KhojUser:
     )
     await user.asave()
 
-    await Subscription.objects.acreate(user=user, type=Subscription.Type.STANDARD)
+    user_subscription = await Subscription.objects.filter(user=user).afirst()
+    if not user_subscription:
+        await Subscription.objects.acreate(user=user, type=Subscription.Type.STANDARD)
 
     return user
 
@@ -296,7 +298,9 @@ async def create_user_by_google_token(token: dict) -> KhojUser:
         user=user,
     )
 
-    await Subscription.objects.acreate(user=user, type=Subscription.Type.STANDARD)
+    user_subscription = await Subscription.objects.filter(user=user).afirst()
+    if not user_subscription:
+        await Subscription.objects.acreate(user=user, type=Subscription.Type.STANDARD)
 
     return user
 
@@ -345,7 +349,7 @@ async def set_user_subscription(
     user_subscription.type = type
     if is_recurring is not None:
         user_subscription.is_recurring = is_recurring
-    if renewal_date is False:
+    if renewal_date is None:
         user_subscription.renewal_date = None
     elif renewal_date is not None:
         user_subscription.renewal_date = renewal_date

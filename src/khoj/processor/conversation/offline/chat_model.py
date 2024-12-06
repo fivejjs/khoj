@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from threading import Thread
 from typing import Any, Iterator, List, Optional, Union
 
+import pyjson5
 from langchain.schema import ChatMessage
 from llama_cpp import Llama
 
@@ -13,13 +14,20 @@ from khoj.processor.conversation import prompts
 from khoj.processor.conversation.offline.utils import download_model
 from khoj.processor.conversation.utils import (
     ThreadedGenerator,
+    clean_json,
     commit_conversation_trace,
     generate_chatml_messages_with_context,
     messages_to_print,
 )
 from khoj.utils import state
 from khoj.utils.constants import empty_escape_sequences
-from khoj.utils.helpers import ConversationCommand, in_debug_mode, is_none_or_empty
+from khoj.utils.helpers import (
+    ConversationCommand,
+    in_debug_mode,
+    is_none_or_empty,
+    is_promptrace_enabled,
+    truncate_code_context,
+)
 from khoj.utils.rawconfig import LocationData
 from khoj.utils.yaml import yaml_dump
 
@@ -108,8 +116,8 @@ def extract_questions_offline(
 
     # Extract and clean the chat model's response
     try:
-        response = response.strip(empty_escape_sequences)
-        response = json.loads(response)
+        response = clean_json(empty_escape_sequences)
+        response = pyjson5.loads(response)
         questions = [q.strip() for q in response["queries"] if q.strip()]
         questions = filter_questions(questions)
     except:
@@ -206,7 +214,9 @@ def converse_offline(
 
         context_message += f"{prompts.online_search_conversation_offline.format(online_results=yaml_dump(simplified_online_results))}\n\n"
     if ConversationCommand.Code in conversation_commands and not is_none_or_empty(code_results):
-        context_message += f"{prompts.code_executed_context.format(code_results=str(code_results))}\n\n"
+        context_message += (
+            f"{prompts.code_executed_context.format(code_results=truncate_code_context(code_results))}\n\n"
+        )
     context_message = context_message.strip()
 
     # Setup Prompt with Primer or Conversation History
@@ -246,7 +256,7 @@ def llm_thread(g, messages: List[ChatMessage], model: Any, max_prompt_size: int 
             g.send(response_delta)
 
         # Save conversation trace
-        if in_debug_mode() or state.verbose > 1:
+        if is_promptrace_enabled():
             commit_conversation_trace(messages, aggregated_response, tracer)
 
     finally:
@@ -287,7 +297,7 @@ def send_message_to_model_offline(
     # Streamed responses need to be saved by the calling function
     tracer["chat_model"] = model
     tracer["temperature"] = temperature
-    if in_debug_mode() or state.verbose > 1:
+    if is_promptrace_enabled():
         commit_conversation_trace(messages, response_text, tracer)
 
     return response_text

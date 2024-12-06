@@ -432,7 +432,15 @@ def chat_sessions(
         conversations = conversations[:8]
 
     sessions = conversations.values_list(
-        "id", "slug", "title", "agent__slug", "agent__name", "created_at", "updated_at"
+        "id",
+        "slug",
+        "title",
+        "agent__slug",
+        "agent__name",
+        "created_at",
+        "updated_at",
+        "agent__style_icon",
+        "agent__style_color",
     )
 
     session_values = [
@@ -442,6 +450,8 @@ def chat_sessions(
             "agent_name": session[4],
             "created": session[5].strftime("%Y-%m-%d %H:%M:%S"),
             "updated": session[6].strftime("%Y-%m-%d %H:%M:%S"),
+            "agent_icon": session[7],
+            "agent_color": session[8],
         }
         for session in sessions
     ]
@@ -552,8 +562,7 @@ async def generate_chat_title(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     new_title = await acreate_title_from_history(request.user.object, conversation=conversation)
-
-    conversation.slug = new_title
+    conversation.slug = new_title[:200]
 
     await conversation.asave()
 
@@ -693,7 +702,7 @@ async def chat(
             chat_metadata["agent"] = conversation.agent.slug if conversation and conversation.agent else None
             chat_metadata["latency"] = f"{latency:.3f}"
             chat_metadata["ttft_latency"] = f"{ttft:.3f}"
-            chat_metadata["usage"] = tracer.get("usage")
+            chat_metadata["cost"] = f"{cost:.5f}"
 
             logger.info(f"Chat response time to first token: {ttft:.3f} seconds")
             logger.info(f"Chat response total time: {latency:.3f} seconds")
